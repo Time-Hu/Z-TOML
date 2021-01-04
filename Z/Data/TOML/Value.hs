@@ -2,10 +2,10 @@ module Z.Data.TOML.Value where
 
 import Z.Data.Vector
 import Z.Data.Text
-
-type KeyV = (Text, Value)
-type KeyVs = [(Text, Value)]
-data TableKey = AKey Text | StdKey Text deriving (Show)
+import Data.Time
+type KeyV = ([Text], Value)
+type KeyVs = [([Text], Value)]
+data TableKey = AKey [Text] | StdKey [Text] deriving (Show)
 
 data Toml = TKeyV KeyVs | Table TableKey KeyVs deriving (Show)
 data Value = TString Text 
@@ -14,6 +14,7 @@ data Value = TString Text
            | TArray [Value]
            | TInlineTable KeyVs
            | TBool Bool
+           | TTime ZonedTime 
         --    | TTime UTCTime
           deriving (Show)
 

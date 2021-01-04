@@ -2,8 +2,8 @@ module Z.Data.TOML.Parser where
 
 import qualified Z.Data.JSON.Value as J 
 import qualified Z.Data.Parser as P 
-import Z.Data.Parser ( Parser, word8, skipWhile, integer, double', bytes )
-import Z.Data.Text (Text, validate)
+import Z.Data.Parser ( Parser, word8, skipWhile, integer, double', bytes, zonedTime )
+import qualified Z.Data.Text as T
 import Z.Data.TOML.Value 
 import Data.Word ( Word8 )
 import Control.Applicative ( Alternative((<|>)), many, some )
@@ -32,10 +32,12 @@ tableP = Table <$> (ws *> tableKeyP <* wsComments) <*> keyVsP
 
 valueP :: Parser Value
 valueP = tStringP 
+     <|> tTimeP
      <|> tIntegerP
      <|> tDoubleP
      <|> tArrayP
      <|> tInlineTableP
+     <|> tBoolP
 
 
 tStringP :: Parser Value 
@@ -55,7 +57,12 @@ tArrayP = TArray <$> arrayP valueP
 tInlineTableP :: Parser Value
 tInlineTableP = TInlineTable <$> curly (wsSurround keyVP `sepBy` word8 comma)
 
+tBoolP :: Parser Value 
+tBoolP = TBool True <$ bytes "true" 
+     <|> TBool False <$ bytes "false"
 
+tTimeP :: Parser Value 
+tTimeP = TTime <$> zonedTime 
 
 --curly (sepBy valueP comma)
 -------------------------------------------------------------------
@@ -71,24 +78,22 @@ comments = word8 hashtag <* skipWhile (not . isEol)
 arrayP :: Parser a ->  Parser [a] 
 arrayP p = square (comment p `sepEndBy` word8 comma)
 
-stringMulP :: Parser Text
+stringMulP :: Parser T.Text
 stringMulP = undefined 
 
-stringBscP :: Parser Text
+stringBscP :: Parser T.Text
 stringBscP = doubleQ J.string  
 
-stringLitP :: Parser Text
+stringLitP :: Parser T.Text
 stringLitP = do 
     x <- P.takeWhile (/= singleQuote)
-    return . validate $ x 
+    return . T.validate $ x 
 
-keyP :: Parser Text 
-keyP = ((<$>) (<>) ((<$>) (<>) ((validate <$> P.takeWhile isKeyChar)
-                           <|> stringBscP)
-                  <*> (comment (word8 dot) $> "."))
-       <*> keyP)
-    <|> validate <$> P.takeWhile isKeyChar
-    <|> stringBscP
+keyP :: Parser [T.Text]
+keyP =((T.validate <$> P.takeWhile isKeyChar) <|> stringBscP)    
+      `sepBy` 
+      (comment (word8 dot) $> ".")
+
 
 square :: Parser a -> Parser a
 square p = word8 openSquare *> (p <* wsComments) <* word8 closeSquare 
@@ -206,15 +211,27 @@ newline = 0x0A
 
 ---------------------------
 convertValue :: Value -> J.Value 
-convertValue (TString t) = J.String t 
-convertValue (TInteger i) = J.Number $ fromInteger i 
-convertValue (TDouble d) = J.Number $ fromFloatDigits d 
-convertValue (TArray xs) = J.Array . pack $ convertValue <$> xs
+convertValue (TString t)        = J.String t 
+convertValue (TInteger i)       = J.Number $ fromInteger i 
+convertValue (TDouble d)        = J.Number $ fromFloatDigits d 
+convertValue (TArray xs)        = J.Array . pack $ convertValue <$> xs
 convertValue (TInlineTable kvs) = J.Object . pack $ convertKeyV <$> kvs
+convertValue (TBool b)          = J.Bool b
+convertValue (TTime t)          = J.String $ T.pack (show t)
 
 convert :: Toml -> J.Value
-convert (Table (AKey tk) kvs) = J.Array . pack $ J.Object . singleton . convertKeyV <$> kvs
-convert (Table (StdKey tk) kvs) = J.Object . pack $ convertKeyV <$> kvs
+convert (Table (AKey tk) kvs)   = expand tk (J.Array . pack $ J.Object . singleton . convertKeyV <$> kvs)
+convert (Table (StdKey tk) kvs) = expand tk (J.Object . pack $ convertKeyV <$> kvs)
+convert (TKeyV kvs)             = J.Object $ pack (convertKeyV <$> kvs)
 
-convertKeyV :: (Text, Value) -> (Text, J.Value)
-convertKeyV (x, y) = (x, convertValue y)
+convertKeyV :: ([T.Text], Value) -> (T.Text, J.Value)
+convertKeyV (x:xs, y) = (x, expand xs (convertValue y))
+convertKeyV ([], _)   = error "empty key" 
+
+
+expand :: [T.Text] -> J.Value -> J.Value
+expand = foldr f id 
+  where 
+    f x y z = J.Object $ singleton (x, y z)
+-- Time 
+-- MultiLine
