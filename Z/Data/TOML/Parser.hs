@@ -1,17 +1,23 @@
 module Z.Data.TOML.Parser where
 
-import qualified Z.Data.JSON.Value as J 
-import qualified Z.Data.Parser as P 
-import Z.Data.Parser ( Parser, word8, skipWhile, integer, double', bytes, zonedTime )
-import qualified Z.Data.Text as T
-import Z.Data.TOML.Value 
-import Data.Word ( Word8 )
-import Control.Applicative ( Alternative((<|>)), many, some )
-import Control.Applicative.Combinators
-import Data.Functor ( ($>) )
-import Z.Data.Vector
-import Data.Scientific (fromFloatDigits)
+import qualified Z.Data.JSON.Value   as J 
+import qualified Z.Data.Parser       as P 
+import qualified Z.Data.Text         as T
+import qualified Z.Data.Text.Base    as T
+import           Z.Data.Parser       ( Parser, word8, skipWhile, integer, double', bytes, zonedTime )
+import           Z.Data.Vector                 as V ( length, pack, singleton, Bytes ) 
+import           Data.Bits                ((.&.))
+import           Z.Data.Vector.Base  as V
+import           Z.Data.Vector.Extra as V
+import           Z.Foreign
+import           Data.Word           ( Word8, Word32 )
+import           Data.Scientific     ( fromFloatDigits )
+import           Data.Functor        ( ($>) )
+import           Control.Applicative ( Alternative((<|>)), many, some )
+import           Control.Applicative.Combinators
+import           System.IO.Unsafe    ( unsafeDupablePerformIO )
 
+import Z.Data.TOML.Value 
 
 keyVP :: Parser KeyV
 keyVP = (,) <$> keyP <* ws <* word8 equal <* ws <*> valueP
@@ -79,10 +85,10 @@ arrayP :: Parser a ->  Parser [a]
 arrayP p = square (comment p `sepEndBy` word8 comma)
 
 stringMulP :: Parser T.Text
-stringMulP = undefined 
+stringMulP = doubleQTriple string_
 
 stringBscP :: Parser T.Text
-stringBscP = doubleQ J.string  
+stringBscP = J.string  
 
 stringLitP :: Parser T.Text
 stringLitP = do 
@@ -90,9 +96,9 @@ stringLitP = do
     return . T.validate $ x 
 
 keyP :: Parser [T.Text]
-keyP =((T.validate <$> P.takeWhile isKeyChar) <|> stringBscP)    
+keyP =(stringBscP <|> singleQ stringLitP <|> T.validate <$> P.takeWhile isKeyChar)    
       `sepBy` 
-      (comment (word8 dot) $> ".")
+      wsSurround (word8 dot)
 
 
 square :: Parser a -> Parser a
@@ -114,8 +120,11 @@ singleQTriple p = bytes "\'\'\'"
                *> p 
                <* bytes "\'\'\'"
 
-doubleQ :: Parser a -> Parser a 
-doubleQ p = word8 doubleQuote *> p <* word8 doubleQuote 
+
+doubleQTriple :: Parser a -> Parser a 
+doubleQTriple p = bytes "\"\"\""
+               *> p 
+            --    <* bytes "\"\"\""
 
 comment :: Parser a -> Parser a 
 comment p = wsComments *> p <* wsComments
@@ -132,15 +141,6 @@ nl = word8 newline
 
 wsComments :: Parser [()]
 wsComments = many ((comments <|> nl) <|> (word8 9 <|> word8 32))
-
--- sepBy' :: Parser a -> Word8 -> Parser [a]
--- sepBy' p w = ((:) <$> p) <*> (ws *> word8 w *> ws *> (sepBy' p w
---                                       <|> pure [])
---                              <|>  pure [])
-
--- sepBy :: Parser a -> Word8 -> Parser [a]
--- sepBy p w = ((:) <$> p) <*> (ws *> word8 w *> ws *> sepBy p w
---                         <|>  pure [])
 
 token :: Parser a -> Parser a 
 token p = p <* ws
@@ -202,13 +202,6 @@ newline = 0x0A
 
 
 
-
-
-
-
-
-
-
 ---------------------------
 convertValue :: Value -> J.Value 
 convertValue (TString t)        = J.String t 
@@ -225,8 +218,9 @@ convert (Table (StdKey tk) kvs) = expand tk (J.Object . pack $ convertKeyV <$> k
 convert (TKeyV kvs)             = J.Object $ pack (convertKeyV <$> kvs)
 
 convertKeyV :: ([T.Text], Value) -> (T.Text, J.Value)
+convertKeyV ([x],  y) = (x, convertValue y)
 convertKeyV (x:xs, y) = (x, expand xs (convertValue y))
-convertKeyV ([], _)   = error "empty key" 
+convertKeyV ([],   _) = error "empty key" 
 
 
 expand :: [T.Text] -> J.Value -> J.Value
@@ -235,3 +229,38 @@ expand = foldr f id
     f x y z = J.Object $ singleton (x, y z)
 -- Time 
 -- MultiLine
+
+
+
+string_ :: P.Parser T.Text
+string_ = do
+    (bs, state) <- P.scanChunks 0 go
+    let mt = case state .&. 0xFF of
+            -- need escaping
+            1 -> unsafeDupablePerformIO (do
+                    let !len = V.length bs
+                    (!pa, !len') <- allocPrimArrayUnsafe len (\ mba# ->
+                        withPrimVectorUnsafe bs (decode_json_string mba#))
+                    if len' >= 0
+                    then pure (Just (T.Text (V.PrimVector pa 0 len')))  -- unescaping also validate utf8
+                    else pure Nothing)
+            3 -> Nothing    -- reject unescaped control characters
+            _ -> T.validateMaybe bs
+    case mt of
+        Just t -> P.skipWord8 $> t
+        _  -> P.fail' "Z.Data.JSON.Value.string_: utf8 validation or unescaping failed"
+  where
+    go :: Word32 -> V.Bytes -> Either Word32 (V.Bytes, V.Bytes, Word32)
+    go !state v =
+        case unsafeDupablePerformIO . withPrimUnsafe state $ \ ps ->
+                withPrimVectorUnsafe v (find_json_string_end ps)
+        of (state', len)
+            | len >= 0 ->
+                let !r = V.unsafeTake len v
+                    !rest = V.unsafeDrop len v
+                in Right (r, rest, state')
+            | otherwise -> Left state'
+
+foreign import ccall unsafe find_json_string_end :: MBA# Word32 -> BA# Word8 -> Int -> Int -> IO Int
+foreign import ccall unsafe decode_json_string :: MBA# Word8 -> BA# Word8 -> Int -> Int -> IO Int
+

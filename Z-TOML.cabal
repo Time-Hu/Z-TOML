@@ -15,13 +15,30 @@ version:             0.1.0.0
 -- category:
 build-type:          Simple
 extra-source-files:  CHANGELOG.md
+                     include/text.h
+                     cbits/text.c
 
+
+custom-setup
+   setup-depends: base >= 4.5 && < 5, Cabal >= 2.4 && < 4
+
+source-repository head
+    type:     git
+    location: git://github.com/haskell-Z/z-data.git
+
+flag integer-simple
+    description:
+        Use the [simple integer library](http://hackage.haskell.org/package/integer-simple)
+        instead of [integer-gmp](http://hackage.haskell.org/package/integer-gmp)
+    default: False
+    manual: False
 
 executable Z-TOML
   main-is:             Main.hs
   other-modules:       Z.Data.TOML.Parser 
                    ,   Z.Data.TOML.Value
                    ,   Z.Data.TOML.Test
+                   ,   Z.Data.TOML.Builder
   
   
   build-depends:       base >=4.14 && <4.15
@@ -30,7 +47,66 @@ executable Z-TOML
                    ,   time >=1.9.3
                    ,   Z-Data >=0.3.0.0
                    ,   Z-IO   >=0.2.0.0
+  
+  if os(windows)
+      extra-libraries:    stdc++
+      cc-options:         -DWIN32_LEAN_AND_MEAN -D_WIN32_WINNT=0x0600
+  else
+      extra-libraries:    stdc++ pthread
+
+  if flag(integer-simple)
+      cpp-options:        -DINTEGER_SIMPLE
+      build-depends:      integer-simple >= 0.1 && < 0.5
+  else
+      cpp-options:        -DINTEGER_GMP
+      build-depends:      integer-gmp >= 0.2 && < 1.1
+
+
+  include-dirs:           include
+                          
+
+  includes:               text.h
+
+  install-includes:       text.h
+
+  c-sources:              cbits/text.c
   -- hs-source-dirs:
   default-language:    Haskell2010
 
-  default-extensions:  OverloadedStrings
+  default-extensions:  BangPatterns
+                       BinaryLiterals
+                       CApiFFI
+                       ConstraintKinds
+                       CPP 
+                       DerivingStrategies
+                       DeriveGeneric
+                       DeriveAnyClass
+                       DefaultSignatures
+                       DataKinds
+                       ExistentialQuantification
+                       FlexibleContexts
+                       FlexibleInstances
+                       GeneralizedNewtypeDeriving 
+                       KindSignatures
+                       MagicHash
+                       MultiParamTypeClasses
+                       MultiWayIf
+                       PartialTypeSignatures
+                       PatternSynonyms 
+                       PolyKinds
+                       QuantifiedConstraints
+                       QuasiQuotes
+                       OverloadedStrings
+                       RankNTypes
+                       RecordWildCards
+                       ScopedTypeVariables 
+                       StandaloneDeriving
+                       TemplateHaskell
+                       TypeApplications
+                       TypeFamilyDependencies
+                       TypeFamilies
+                       TypeOperators
+                       TupleSections
+                       UnboxedTuples 
+                       UnliftedFFITypes 
+                       ViewPatterns
